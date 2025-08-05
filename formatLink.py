@@ -18,7 +18,7 @@ def formatLink(type: str, weaponName: str, skinName: str, quality: str,  isSouve
     return urlBase + weaponName + " | " + skinName + " (" + quality + ")"
 
 def seperateNames(rowElement):
-    weaponList = ["Glock-18", "P20000", "USP-S", "Dual Berettas", "P250", "Tec-9", "CZ75-Auto", "Five-SeveN", "Desert Eagle", "R8 Revolver",
+    weaponList = ["Glock-18", "P2000", "USP-S", "Dual Berettas", "P250", "Tec-9", "CZ75-Auto", "Five-SeveN", "Desert Eagle", "R8 Revolver",
                  "MAC-10", "MP9", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon", "Nova", "XM1014", "Sawed-Off", "MAG-7", "M249", "Negev", "Galil AR",
                  "FAMAS" , "AK-47", "M4A4", "M4A1-S", "SSG 08", "SG 553", "AUG", "AWP", "G3SG1", "SCAR-20", "Zeus x27"]
     splitText = rowElement.split(" ")
@@ -37,7 +37,7 @@ def fixSpreadSheet():
     skinList = pd.read_csv(sheet)
     for index, row in skinList.iterrows():
         separatedNames = seperateNames(skinList.iloc[index, 0])
-        skinList.iloc[index, 0] = separatedNames[0]
+        skinList.iloc[index, 0] = separatedNames[0] 
         skinList.iloc[index, 1] = separatedNames[1]
     return skinList.to_csv(sheet, index = False)
 
