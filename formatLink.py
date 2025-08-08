@@ -1,8 +1,13 @@
+import os
 import time
 from enum import Enum
 
 import pandas as pd  # type: ignore
+import psycopg
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class cs2ObjectType(Enum):
@@ -124,12 +129,6 @@ def collectionIsSouvenir(collection: str):
     return False
 
 
-cookies = {
-    "sessionId": "a1d0927e052666febaac2074",
-    "steamLoginSecure": "76561198123389177%7C%7CeyAidHlwIjogIkpXVCIsICJhbGciOiAiRWREU0EiIH0.eyAiaXNzIjogInI6MDAwQ18yNkIyRUM1RF80MzI1RCIsICJzdWIiOiAiNzY1NjExOTgxMjMzODkxNzciLCAiYXVkIjogWyAid2ViOmNvbW11bml0eSIgXSwgImV4cCI6IDE3NTQ2MTgwMzAsICJuYmYiOiAxNzQ1ODkxNTIyLCAiaWF0IjogMTc1NDUzMTUyMiwgImp0aSI6ICIwMDE5XzI2QkMyN0RGXzNFOUZFIiwgIm9hdCI6IDE3NTM4MzY3NzksICJydF9leHAiOiAxNzcxNjk2ODgzLCAicGVyIjogMCwgImlwX3N1YmplY3QiOiAiMTY2LjE5Ni42MS4xMTAiLCAiaXBfY29uZmlybWVyIjogIjE3Mi41OC41MS42NCIgfQ.d0HMGnzZ7YGQ6a2eqyGj7__iT1K0EgY6iryQtg_gFhVKDYia5XgAKjruQ4mhwToPxEk__kiYl2cTMCohobJJAg",
-}
-
-
 def writeItemEntry():
     class columns(Enum):
         weaponName = 0
@@ -148,90 +147,139 @@ def writeItemEntry():
     # 1. Access the skin list
     sheet = "weaponSkins.csv"
     skinList = pd.read_csv(sheet)
-    # 2. Select a row, grab type, weaponName, and skinName
-    for index, row in skinList.iterrows():
-        weaponName = str(skinList.iloc[index, columns.weaponName.value])
-        skinName = str(skinList.iloc[index, columns.skinName.value])
-        collection = str(skinList.iloc[index, columns.collection.value])
-        # 3. generate a list of formattedLinks by by rarity. Bear in mind you have to distinguish between souvenir and statTrak
 
-        # Changes to make
-        # 1. add timer for keeping track of rate limiting
-        # 2. no appends instead we will do the database query at time of link generation (completed)
-        # 3. add exception to return the
-        # 4. keep track of 500 (does not exist), 429 (rate limited), and any other errors in a csv
-        # 5. track the number of cocurrent requests
+    db_user = os.getenv("username")
+    db_password = os.getenv("password")
+    db_host = os.getenv("host")
+    db_port = os.getenv("port")
+    db_name = os.getenv("database")
+    sessionID = os.getenv("sessionid", "")
+    steamLoginSecure = os.getenv("steamLoginSecure", "")
+    cookies = {"sessionId": sessionID, "steamLoginSecure": steamLoginSecure}
+    connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode=require"
 
-        baseLinks, souvenirLinks, statTrakLinks = [], [], []
-        does_not_exist_arr, rate_limited_arr = [], []
-        # open a connection to the database
-        for i in range(len(qualities)):
-            base_start_time = time.perf_counter()
-            base_link = formatLink(
-                cs2ObjectType.gun, weaponName, skinName, qualities[i], False, False
-            )
-            print(base_link)
-            base_data = requests.get(base_link, cookies=cookies)
-            print(base_data.status_code)
-            print(base_data.content)
-            if base_data.status_code == 500:
-                does_not_exist_arr.append(base_link)
-            elif base_data.status_code == 429:
-                rate_limited_arr.append(base_link)
-            else:
-                # make reqeust to database
-                # check if weapon, collection, and skin exist
-                # if they dont create them
-                # create a skin instance with the skinName, weaponName, exterior quality, and stattrack/souvenir
-                # iterate over price history and create a batch of price_history objects to send to the database
-                # once the operations are complete, end the timer and see if it falls outside of the 3.5 second window, if not then sleep until it does
-                print()
+    with psycopg.connect(connection_string) as conn:
+        with conn.cursor() as cur:
+            # 2. Select a row, grab type, weaponName, and skinName
+            for index, row in skinList.head(1).iterrows():
+                weaponName = str(skinList.iloc[index, columns.weaponName.value])
+                skinName = str(skinList.iloc[index, columns.skinName.value])
+                collection = str(skinList.iloc[index, columns.collection.value])
+                # 3. generate a list of formattedLinks by by rarity. Bear in mind you have to distinguish between souvenir and statTrak
 
-                # create the try except logic for saving the last index pairing and list of 500/429 urls
+                # Changes to make
+                # 1. add timer for keeping track of rate limiting
+                # 2. no appends instead we will do the database query at time of link generation (completed)
+                # 3. add exception to return the
+                # 4. keep track of 500 (does not exist), 429 (rate limited), and any other errors in a csv
+                # 5. track the number of cocurrent requests
 
-            print(f"\n\n#########\n\n")
+                # BASE KNIFES ARE VANILLA
 
-            if collectionIsSouvenir(collection):
-                souvenir_link = formatLink(
-                    cs2ObjectType.gun,
-                    weaponName,
-                    skinName,
-                    qualities[i],
-                    True,
-                    False,
-                )
+                baseLinks, souvenirLinks, statTrakLinks = [], [], []
+                does_not_exist_arr, rate_limited_arr = [], []
+                # open a connection to the database
+                for i in range(len(qualities)):
+                    base_start_time = time.perf_counter()
+                    base_link = formatLink(
+                        cs2ObjectType.gun,
+                        weaponName,
+                        skinName,
+                        qualities[i],
+                        False,
+                        False,
+                    )
+                    print(base_link)
+                    base_data = requests.get(base_link, cookies=cookies)
+                    print(base_data.status_code)
+                    print(base_data.content)
+                    if base_data.status_code == 500:
+                        does_not_exist_arr.append(base_link)
+                    elif base_data.status_code == 429:
+                        rate_limited_arr.append(base_link)
+                    else:
+
+                        # make reqeust to database
+                        # check if weapon, collection, and skin exist
+                        # if they dont create them
+                        weapon_check = "SELECT WHERE EXISTS (SELECT 1 FROM weapons WHERE name = %s);"
+                        cur.execute(weapon_check, (weaponName,))
+                        item_exists = cur.fetchone()
+                        if item_exists:
+                            print(item_exists)
+                        else:
+                            print(
+                                f"Need to create record for the collection: {weaponName}"
+                            )
+                        collections_check = "SELECT WHERE EXISTS (SELECT 1 FROM collections WHERE name = %s);"
+                        cur.execute(collections_check, (collection,))
+                        item_exists = cur.fetchone()
+                        if item_exists:
+                            print(item_exists)
+                        else:
+                            print(
+                                f"Need to create record for the collection: {collection}"
+                            )
+                        skin_check = (
+                            "SELECT WHERE EXISTS (SELECT 1 FROM skin WHERE name = %s);"
+                        )
+                        cur.execute(skin_check, (skinName,))
+                        item_exists = cur.fetchone()
+                        if item_exists:
+                            print(item_exists)
+                        else:
+                            print(f"Need to create record for the skin: {skinName}")
+                        # create a skin instance with the skinName, weaponName, exterior quality, and stattrack/souvenir
+                        create_skin_instance = f"INSERT INTO skin_instance (weapon_name, skin_name, exterior) VALUES (%s, %s, %s)"
+                        # iterate over price history and create a batch of price_history objects to send to the database
+                        # once the operations are complete, end the timer and see if it falls outside of the 3.5 second window, if not then sleep until it does
+                        print()
+
+                        # create the try except logic for saving the last index pairing and list of 500/429 urls
+
+                    print(f"\n\n#########\n\n")
+
+                    if collectionIsSouvenir(collection):
+                        souvenir_link = formatLink(
+                            cs2ObjectType.gun,
+                            weaponName,
+                            skinName,
+                            qualities[i],
+                            True,
+                            False,
+                        )
+
+                        # TESTING
+                        # print(baseLinks)
+                        # print(souvenirLinks)
+                        return
+                    else:
+                        stattrak_link = formatLink(
+                            cs2ObjectType.gun,
+                            weaponName,
+                            skinName,
+                            qualities[i],
+                            False,
+                            True,
+                        )
 
                 # TESTING
                 # print(baseLinks)
                 # print(souvenirLinks)
+                # print(statTrakLinks)
+                print(index)
                 return
-            else:
-                stattrak_link = formatLink(
-                    cs2ObjectType.gun,
-                    weaponName,
-                    skinName,
-                    qualities[i],
-                    False,
-                    True,
-                )
 
-        # TESTING
-        # print(baseLinks)
-        # print(souvenirLinks)
-        # print(statTrakLinks)
-        print(index)
-        return
+            # 4. Iteratively make an API request for each formattedLink, a lot of these will not work
 
-    # 4. Iteratively make an API request for each formattedLink, a lot of these will not work
+            # IDEAS
+            # Suppose we get a set number of faulty requests. When a limit is reached, check the end points of each array to see
+            # where we left off. Get that index/location of the last good request
+            #  and return it. Use as input of function as starting point for link
+            # generation.
 
-    # IDEAS
-    # Suppose we get a set number of faulty requests. When a limit is reached, check the end points of each array to see
-    # where we left off. Get that index/location of the last good request
-    #  and return it. Use as input of function as starting point for link
-    # generation.
-
-    # 5. Access the dictonary and contain the data in a spreadsheet for further development
-    return
+            # 5. Access the dictonary and contain the data in a spreadsheet for further development
+            return
 
 
 # fixSpreadSheet()
