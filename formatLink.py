@@ -6,6 +6,7 @@ from enum import Enum
 import pandas as pd  # type: ignore
 import psycopg
 import requests
+import threading
 from dotenv import load_dotenv
 
 
@@ -208,8 +209,10 @@ def writeItemEntry():
                 
                 # open a connection to the database
 
+                # rate limiting timer start (keeps track )
+                # rate limiting counter variable = 0
+                base_start_time = time.perf_counter()
                 for quality_index in range(len(qualities)):
-                    base_start_time = time.perf_counter()
                     base_prices_data = get_skin_data(
                         weaponName,
                         skinName,
@@ -333,6 +336,7 @@ def get_skin_data(
         does_not_exist_arr.append(base_link)
     elif status_code == 429:
         rate_limited_arr.append(base_link)
+    request_end_time = time.perf_counter
     return base_prices_data
 
 def update_collections(cur, collection, formatted_release_date):
