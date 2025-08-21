@@ -8,6 +8,7 @@ import psycopg
 import requests
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 
@@ -129,6 +130,17 @@ def collectionIsSouvenir(collection: str):
             return True
     return False
 
+# Make an array for psycopg3 executemany requests
+def make_batches(cur, data_to_insert):
+    cur.executemany("INSERT INTO weapons (name) VALUES (%s)", data_to_insert[0])
+    cur.executemany("INSERT INTO collections (name, release_date) VALUES (%s, %s);", data_to_insert[1])
+    cur.executemany("INSERT INTO skin (name, rarity, weapon_name) VALUES (%s, %s, %s) RETURNING name;", data_to_insert[2])
+    cur.executemany("INSERT INTO skin_collections (skin_name, collection_name) VALUES (%s, %s);", data_to_insert[3])
+    cur.executemany("INSERT INTO skin_instance (weapon_name, skin_name, exterior, stattrak, souvenir) VALUES (%s, %s, %s, %s, %s) RETURNING id;", data_to_insert[4])
+    cur.executemany("INSERT INTO price_history (skin_instance_id, date, price, sold_volume_count) VALUES (%s, %s, %s, %s);", data_to_insert[5])
+
+
+
 
 def writeItemEntry():
     class columns(Enum):
@@ -163,6 +175,14 @@ def writeItemEntry():
         with conn.cursor() as cur:
             print("database cursor created.\n")
 
+            does_not_exist_arr, rate_limited_arr = [], []
+            weapon_name_set = set()
+            skin_set = set()
+            collection_set = set()
+            skin_collections_set = set()
+            skin_instances_tuples = []
+            price_hist_tuples = []
+
             # 2. Select a row, grab type, weaponName, and skinName
             for index, row in skinList.head(1).iterrows():
                 weaponName = str(skinList.iloc[index, columns.weaponName.value])
@@ -183,9 +203,11 @@ def writeItemEntry():
 
                 # BASE KNIFES ARE CALLED VANILLA
 
+                num_valid_skin_instances = 0
                 baseLinks, souvenirLinks, statTrakLinks = [], [], []
-                does_not_exist_arr, rate_limited_arr = [], []
+                
                 # open a connection to the database
+
                 for quality_index in range(len(qualities)):
                     base_start_time = time.perf_counter()
                     base_prices_data = get_skin_data(
@@ -197,77 +219,88 @@ def writeItemEntry():
                         rate_limited_arr,
                     )
                     if base_prices_data:
-                        update_weapons(cur, weaponName)
-                        update_collections(cur, collection, formatted_release_date)
-                        update_skins(cur, skinName, rarity, weaponName)
-                        update_skin_collections(cur, skinName, collection)
-                        update_skin_instance(
-                            cur,
+                        weapon_name_set.add((weaponName,))
+                        collection_set.add((collection, formatted_release_date))
+                        skin_set.add((skinName, rarity, weaponName))
+                        skin_collections_set.add((skinName, collection))
+                        skin_instances_tuples.append((
                             weaponName,
                             skinName,
-                            qualities,
-                            quality_index,
+                            qualities[quality_index],
                             False,
                             False,
-                            base_prices_data,
-                        )
+                        ))
+                        create_price_tuples(base_prices_data, price_hist_tuples, len(skin_instances_tuples))
+                        weapon_name_tuples = tuple(weapon_name_set)
+                        collection_tuples = tuple(collection_set)
+                        skin_tuples = tuple(skin_set)
+                        skin_collections_tuples = tuple(skin_collections_set)
+                        data_to_insert = [weapon_name_tuples, collection_tuples, skin_tuples, skin_collections_tuples, skin_instances_tuples, price_hist_tuples]
+                        
                     # create the try except logic for saving the last index pairing and list of 500/429 urls
-                    base_end_time = time.perf_counter()
-                    base_time_delta = base_end_time - base_start_time
-                    print(
-                        f"base skins completed! This took {base_time_delta} seconds\n"
-                    )
-                    if collectionIsSouvenir(collection):
-                        souvenir_link = formatLink(
-                            cs2ObjectType.gun,
-                            weaponName,
-                            skinName,
-                            qualities[quality_index],
-                            True,
-                            False,
-                        )
 
-                        # TESTING
-                        # print(baseLinks)
-                        # print(souvenirLinks)
-                        return
-                    else:
-                        stattrak_link = formatLink(
-                            cs2ObjectType.gun,
-                            weaponName,
-                            skinName,
-                            qualities[quality_index],
-                            False,
-                            True,
-                        )
+            # convert weapon and collection sets to tuples
 
-                    print(f"\n\n#########\n\n")
+            make_batches(cur, data_to_insert)
 
-                if len(does_not_exist_arr) > 0:
-                    print(
-                        f"The following URLs are items that dont exist:\n{does_not_exist_arr}\n"
-                    )
-                if len(rate_limited_arr) > 0:
-                    print(
-                        f"The following URLs were rate limited:\n{rate_limited_arr}\n"
-                    )
+            base_end_time = time.perf_counter()
+            base_time_delta = base_end_time - base_start_time
+            print(
+                f"base skins completed! This took {base_time_delta} seconds\n"
+            )
+            return 
+        
+            if collectionIsSouvenir(collection):
+                souvenir_link = formatLink(
+                    cs2ObjectType.gun,
+                    weaponName,
+                    skinName,
+                    qualities[quality_index],
+                    True,
+                    False,
+                )
+
                 # TESTING
                 # print(baseLinks)
                 # print(souvenirLinks)
-                # print(statTrakLinks)
-                print(index)
                 return
+            else:
+                stattrak_link = formatLink(
+                    cs2ObjectType.gun,
+                    weaponName,
+                    skinName,
+                    qualities[quality_index],
+                    False,
+                    True,
+                )
 
-            # 4. Iteratively make an API request for each formattedLink, a lot of these will not work
+            print(f"\n\n#########\n\n")
 
-            # IDEAS
-            # Suppose we get a set number of faulty requests. When a limit is reached, check the end points of each array to see
-            # where we left off. Get that index/location of the last good request
-            #  and return it. Use as input of function as starting point for link
-            # generation.
+        if len(does_not_exist_arr) > 0:
+            print(
+                f"The following URLs are items that dont exist:\n{does_not_exist_arr}\n"
+            )
+        if len(rate_limited_arr) > 0:
+            print(
+                f"The following URLs were rate limited:\n{rate_limited_arr}\n"
+            )
+        # TESTING
+        # print(baseLinks)
+        # print(souvenirLinks)
+        # print(statTrakLinks)
+        print(index)
+        return
 
-            # 5. Access the dictonary and contain the data in a spreadsheet for further development
-            return
+        # 4. Iteratively make an API request for each formattedLink, a lot of these will not work
+
+        # IDEAS
+        # Suppose we get a set number of faulty requests. When a limit is reached, check the end points of each array to see
+        # where we left off. Get that index/location of the last good request
+        #  and return it. Use as input of function as starting point for link
+        # generation.
+
+        # 5. Access the dictonary and contain the data in a spreadsheet for further development
+        return
 
 
 def get_skin_data(
@@ -301,21 +334,6 @@ def get_skin_data(
     elif status_code == 429:
         rate_limited_arr.append(base_link)
     return base_prices_data
-
-
-def update_weapons(cur, weaponName):
-    weapon_check = "SELECT name FROM weapons WHERE name = %s;"
-    cur.execute(weapon_check, (weaponName,))
-    weapon_exists = cur.fetchone()
-    print(f"weapon check: {weapon_exists}")
-    if weapon_exists:
-        print(f"weapon name: {weapon_exists}")
-    else:
-        print(f"Need to create record for the weapon: {weaponName}...")
-        create_weapon = "INSERT INTO weapons (name) VALUES (%s)"
-        cur.execute(create_weapon, (weaponName,))
-        print("...weapon created")
-
 
 def update_collections(cur, collection, formatted_release_date):
     collections_check = "SELECT name FROM collections WHERE name = %s;"
@@ -383,41 +401,11 @@ def update_skin_collections(cur, skinName, collection):
         print(f"...skin+collection record created")
 
 
-def update_skin_instance(
-    cur,
-    weaponName,
-    skinName,
-    qualities,
-    quality_index,
-    isStatTrak,
-    isSouvenir,
+def create_price_tuples(
     base_prices_data,
+    price_hist_tuples,
+    skin_instance_index
 ):
-    skin_instance_check = "SELECT weapon_name, skin_name, exterior, stattrak, souvenir FROM skin_instance WHERE weapon_name = %s AND skin_name = %s AND exterior = %s AND stattrak = %s AND souvenir = %s"
-    cur.execute(
-        skin_instance_check,
-        (weaponName, skinName, qualities[quality_index], isStatTrak, isSouvenir),
-    )
-    instance_exists = cur.fetchone()
-    if instance_exists:
-        print(instance_exists)
-    create_skin_instance = "INSERT INTO skin_instance (weapon_name, skin_name, exterior, stattrak, souvenir) VALUES (%s, %s, %s, %s, %s) RETURNING id;"
-    cur.execute(
-        create_skin_instance,
-        (
-            weaponName,
-            skinName,
-            qualities[quality_index],
-            isStatTrak,
-            isSouvenir,
-        ),
-    )
-    skin_instance_id = cur.fetchone()[0]
-    print(f"skin_instance_id: {skin_instance_id}\n")
-
-    # iterate over price history and create a batch of price_history objects to send to the database
-    # once the operations are complete, end the timer and see if it falls outside of the 3.5 second window, if not then sleep until it does
-
     for record in base_prices_data:
         # if instance_exists then get the most recent price_history record and start adding records from that day
         raw_date = record[0]
@@ -425,21 +413,14 @@ def update_skin_instance(
         sale_volume_count = record[2]
         date_obj = time.strptime(raw_date[:-4], "%b %d %Y %H")
         date_string = f"{date_obj.tm_year}-{date_obj.tm_mon}-{date_obj.tm_mday}"
-        print(
-            f"date: {raw_date}, median: {median_sale_price}, volume: {sale_volume_count}"
-        )
-        print(f"{date_string}")
-        create_price_history = f"INSERT INTO price_history (skin_instance_id, date, price, sold_volume_count) VALUES (%s, %s, %s, %s);"
-        cur.execute(
-            create_price_history,
-            (
-                skin_instance_id,
-                date_string,
-                median_sale_price,
-                sale_volume_count,
-            ),
-        )
-
+        price_hist_tuples.append((
+                str(skin_instance_index),
+                str(date_string),
+                str(median_sale_price),
+                str(sale_volume_count),
+            ))
+        #print(f"{skin_instance_index, date_string, median_sale_price, sale_volume_count}")
 
 # fixSpreadSheet()
 writeItemEntry()
+#print(make_batches("weaponSkins.csv", 0, 0, 100))
