@@ -1,14 +1,13 @@
 import json
 import os
+import threading
 import time
 from enum import Enum
 
 import pandas as pd  # type: ignore
 import psycopg
 import requests
-import threading
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -131,16 +130,30 @@ def collectionIsSouvenir(collection: str):
             return True
     return False
 
+
 # Make an array for psycopg3 executemany requests
 def make_batches(cur, data_to_insert):
     cur.executemany("INSERT INTO weapons (name) VALUES (%s)", data_to_insert[0])
-    cur.executemany("INSERT INTO collections (name, release_date) VALUES (%s, %s);", data_to_insert[1])
-    cur.executemany("INSERT INTO skin (name, rarity, weapon_name) VALUES (%s, %s, %s) RETURNING name;", data_to_insert[2])
-    cur.executemany("INSERT INTO skin_collections (skin_name, collection_name) VALUES (%s, %s);", data_to_insert[3])
-    cur.executemany("INSERT INTO skin_instance (weapon_name, skin_name, exterior, stattrak, souvenir) VALUES (%s, %s, %s, %s, %s) RETURNING id;", data_to_insert[4])
-    cur.executemany("INSERT INTO price_history (skin_instance_id, date, price, sold_volume_count) VALUES (%s, %s, %s, %s);", data_to_insert[5])
-
-
+    cur.executemany(
+        "INSERT INTO collections (name, release_date) VALUES (%s, %s);",
+        data_to_insert[1],
+    )
+    cur.executemany(
+        "INSERT INTO skin (name, rarity, weapon_name) VALUES (%s, %s, %s) RETURNING name;",
+        data_to_insert[2],
+    )
+    cur.executemany(
+        "INSERT INTO skin_collections (skin_name, collection_name) VALUES (%s, %s);",
+        data_to_insert[3],
+    )
+    cur.executemany(
+        "INSERT INTO skin_instance (weapon_name, skin_name, exterior, stattrak, souvenir) VALUES (%s, %s, %s, %s, %s) RETURNING id;",
+        data_to_insert[4],
+    )
+    cur.executemany(
+        "INSERT INTO price_history (skin_instance_id, date, price, sold_volume_count) VALUES (%s, %s, %s, %s);",
+        data_to_insert[5],
+    )
 
 
 def writeItemEntry():
@@ -206,7 +219,7 @@ def writeItemEntry():
 
                 num_valid_skin_instances = 0
                 baseLinks, souvenirLinks, statTrakLinks = [], [], []
-                
+
                 # open a connection to the database
 
                 # rate limiting timer start (keeps track )
@@ -226,20 +239,33 @@ def writeItemEntry():
                         collection_set.add((collection, formatted_release_date))
                         skin_set.add((skinName, rarity, weaponName))
                         skin_collections_set.add((skinName, collection))
-                        skin_instances_tuples.append((
-                            weaponName,
-                            skinName,
-                            qualities[quality_index],
-                            False,
-                            False,
-                        ))
-                        create_price_tuples(base_prices_data, price_hist_tuples, len(skin_instances_tuples))
+                        skin_instances_tuples.append(
+                            (
+                                weaponName,
+                                skinName,
+                                qualities[quality_index],
+                                False,
+                                False,
+                            )
+                        )
+                        create_price_tuples(
+                            base_prices_data,
+                            price_hist_tuples,
+                            len(skin_instances_tuples),
+                        )
                         weapon_name_tuples = tuple(weapon_name_set)
                         collection_tuples = tuple(collection_set)
                         skin_tuples = tuple(skin_set)
                         skin_collections_tuples = tuple(skin_collections_set)
-                        data_to_insert = [weapon_name_tuples, collection_tuples, skin_tuples, skin_collections_tuples, skin_instances_tuples, price_hist_tuples]
-                        
+                        data_to_insert = [
+                            weapon_name_tuples,
+                            collection_tuples,
+                            skin_tuples,
+                            skin_collections_tuples,
+                            skin_instances_tuples,
+                            price_hist_tuples,
+                        ]
+
                     # create the try except logic for saving the last index pairing and list of 500/429 urls
 
             # convert weapon and collection sets to tuples
@@ -248,11 +274,9 @@ def writeItemEntry():
 
             base_end_time = time.perf_counter()
             base_time_delta = base_end_time - base_start_time
-            print(
-                f"base skins completed! This took {base_time_delta} seconds\n"
-            )
-            return 
-        
+            print(f"base skins completed! This took {base_time_delta} seconds\n")
+            return
+
             if collectionIsSouvenir(collection):
                 souvenir_link = formatLink(
                     cs2ObjectType.gun,
@@ -284,9 +308,7 @@ def writeItemEntry():
                 f"The following URLs are items that dont exist:\n{does_not_exist_arr}\n"
             )
         if len(rate_limited_arr) > 0:
-            print(
-                f"The following URLs were rate limited:\n{rate_limited_arr}\n"
-            )
+            print(f"The following URLs were rate limited:\n{rate_limited_arr}\n")
         # TESTING
         # print(baseLinks)
         # print(souvenirLinks)
@@ -339,77 +361,8 @@ def get_skin_data(
     request_end_time = time.perf_counter
     return base_prices_data
 
-def update_collections(cur, collection, formatted_release_date):
-    collections_check = "SELECT name FROM collections WHERE name = %s;"
-    cur.execute(collections_check, (collection,))
-    collection_name = cur.fetchone()
-    if collection_name:
-        print(f"collection name: {collection_name}")
-    else:
-        print(f"Need to create record for the collection: {collection}...")
-        create_collection = (
-            "INSERT INTO collections (name, release_date) VALUES (%s, %s);"
-        )
-        cur.execute(
-            create_collection,
-            (
-                collection,
-                formatted_release_date,
-            ),
-        )
-        print("...collection created")
 
-
-def update_skins(cur, skinName, rarity, weaponName):
-    skin_check = "SELECT name FROM skin WHERE name = %s;"
-    cur.execute(skin_check, (skinName,))
-    skin_id = cur.fetchone()
-    if skin_id:
-        print(f"skin name: {skin_id}")
-    else:
-        print(f"Need to create record for the skin: {skinName}...")
-        create_skin = "INSERT INTO skin (name, rarity, weapon_name) VALUES (%s, %s, %s) RETURNING name;"
-        cur.execute(
-            create_skin,
-            (skinName, rarity, weaponName),
-        )
-        print("...skin created")
-
-
-def update_skin_collections(cur, skinName, collection):
-    skin_collections_check = "SELECT skin_name, collection_name FROM skin_collections WHERE skin_name = %s AND collection_name = %s;"
-    cur.execute(
-        skin_collections_check,
-        (
-            skinName,
-            collection,
-        ),
-    )
-    item_exists = cur.fetchone()
-    if item_exists:
-        print(item_exists)
-    else:
-        print(
-            f"Need to create the colleciton record for {skinName} and {collection}..."
-        )
-        create_skin_collection = (
-            "INSERT INTO skin_collections (skin_name, collection_name) VALUES (%s, %s);"
-        )
-        cur.execute(
-            create_skin_collection,
-            (
-                skinName,
-                collection,
-            ),
-        )
-        print(f"...skin+collection record created")
-
-
-def create_price_tuples(
-    base_prices_data,
-    price_hist_tuples,
-    skin_instance_index
-):
+def create_price_tuples(base_prices_data, price_hist_tuples, skin_instance_index):
     for record in base_prices_data:
         # if instance_exists then get the most recent price_history record and start adding records from that day
         raw_date = record[0]
@@ -417,14 +370,18 @@ def create_price_tuples(
         sale_volume_count = record[2]
         date_obj = time.strptime(raw_date[:-4], "%b %d %Y %H")
         date_string = f"{date_obj.tm_year}-{date_obj.tm_mon}-{date_obj.tm_mday}"
-        price_hist_tuples.append((
+        price_hist_tuples.append(
+            (
                 str(skin_instance_index),
                 str(date_string),
                 str(median_sale_price),
                 str(sale_volume_count),
-            ))
-        #print(f"{skin_instance_index, date_string, median_sale_price, sale_volume_count}")
+            )
+        )
+        # print(f"{skin_instance_index, date_string, median_sale_price, sale_volume_count}")
+
 
 # fixSpreadSheet()
 writeItemEntry()
-#print(make_batches("weaponSkins.csv", 0, 0, 100))
+# print(make_batches("weaponSkins.csv", 0, 0, 100))
+
