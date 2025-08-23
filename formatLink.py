@@ -3,11 +3,11 @@ import os
 import threading
 import time
 from enum import Enum
-
-import pandas as pd  # type: ignore
+import pandas as pd
 import psycopg
 import requests
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -48,7 +48,7 @@ def formatLink(
 
 
 # Split weapon + skin name into separate columns
-def seperateNames(rowElement):
+def seperateNames(rowElement: str):
     weaponList = [
         "Glock-18",
         "P2000",
@@ -132,7 +132,7 @@ def collectionIsSouvenir(collection: str):
 
 
 # Make an array for psycopg3 executemany requests
-def make_batches(cur, data_to_insert):
+def make_batches(cur: psycopg.Cursor, data_to_insert: list):
     cur.executemany("INSERT INTO weapons (name) VALUES (%s)", data_to_insert[0])
     cur.executemany(
         "INSERT INTO collections (name, release_date) VALUES (%s, %s);",
@@ -156,7 +156,72 @@ def make_batches(cur, data_to_insert):
     )
 
 
-def writeItemEntry():
+def makeSteamRequests():
+    class columns(Enum):
+        weaponName = 0
+        skinName = 1
+        rarity = 2
+        collection = 3
+        release = 4
+
+    qualities = [
+        "Battle-Scarred",
+        "Field-Tested",
+        "Well-Worn",
+        "Minimal Wear",
+        "Factory New",
+    ]
+
+    sheet = "weaponSkins.csv"
+    skinList = pd.read_csv(sheet)
+    does_not_exist_arr, rate_limited_arr = [], []
+
+    with open("skins.json", "w") as json_file:
+
+        num_processed = 0
+
+        for index, row in skinList.head(20).iterrows():
+            weaponName = str(skinList.iloc[index, columns.weaponName.value])
+            skinName = str(skinList.iloc[index, columns.skinName.value])
+            rarity = str(skinList.iloc[index, columns.rarity.value])
+            collection = str(skinList.iloc[index, columns.collection.value])
+            raw_release_date = str(skinList.iloc[index, columns.release.value])
+            release_date_obj = time.strptime(raw_release_date, "%d-%b-%y")
+            formatted_release_date = f"{release_date_obj.tm_year}-{release_date_obj.tm_mon}-{release_date_obj.tm_mday}"
+            base_start_time = time.perf_counter()
+            for quality_index in range(len(qualities)):
+                combination = {
+                    "skin_instance_info": (
+                        weaponName,
+                        skinName,
+                        rarity,
+                        collection,
+                        formatted_release_date,
+                        qualities[quality_index],
+                        quality_index,
+                    )
+                }
+                if num_processed <= 69:
+                    base_prices_data = get_skin_data(
+                        weaponName,
+                        skinName,
+                        qualities,
+                        quality_index,
+                        does_not_exist_arr,
+                        rate_limited_arr,
+                    )
+                    num_processed += 1
+                    combination["price_data"] = base_prices_data
+                    json.dump(combination, json_file, indent=4)
+
+                else:
+                    num_processed = 0
+                    time.sleep(61)
+
+    return
+
+
+def populateDatabase():
     class columns(Enum):
         weaponName = 0
         skinName = 1
@@ -206,24 +271,6 @@ def writeItemEntry():
                 raw_release_date = str(skinList.iloc[index, columns.release.value])
                 release_date_obj = time.strptime(raw_release_date, "%d-%b-%y")
                 formatted_release_date = f"{release_date_obj.tm_year}-{release_date_obj.tm_mon}-{release_date_obj.tm_mday}"
-                # 3. generate a list of formattedLinks by by rarity. Bear in mind you have to distinguish between souvenir and statTrak
-
-                # Changes to make
-                # x1. add timer for keeping track of rate limiting
-                # x2. no appends instead we will do the database query at time of link generation (completed)
-                # 3. add exception to return the
-                # x4. keep track of 500 (does not exist), 429 (rate limited), and any other errors in a csv
-                # 5. track the number of cocurrent requests
-
-                # BASE KNIFES ARE CALLED VANILLA
-
-                num_valid_skin_instances = 0
-                baseLinks, souvenirLinks, statTrakLinks = [], [], []
-
-                # open a connection to the database
-
-                # rate limiting timer start (keeps track )
-                # rate limiting counter variable = 0
                 base_start_time = time.perf_counter()
                 for quality_index in range(len(qualities)):
                     base_prices_data = get_skin_data(
@@ -266,8 +313,6 @@ def writeItemEntry():
                             price_hist_tuples,
                         ]
 
-                    # create the try except logic for saving the last index pairing and list of 500/429 urls
-
             # convert weapon and collection sets to tuples
 
             make_batches(cur, data_to_insert)
@@ -301,35 +346,22 @@ def writeItemEntry():
                     True,
                 )
 
-            print(f"\n\n#########\n\n")
-
         if len(does_not_exist_arr) > 0:
             print(
                 f"The following URLs are items that dont exist:\n{does_not_exist_arr}\n"
             )
         if len(rate_limited_arr) > 0:
             print(f"The following URLs were rate limited:\n{rate_limited_arr}\n")
-        # TESTING
-        # print(baseLinks)
-        # print(souvenirLinks)
-        # print(statTrakLinks)
-        print(index)
-        return
-
-        # 4. Iteratively make an API request for each formattedLink, a lot of these will not work
-
-        # IDEAS
-        # Suppose we get a set number of faulty requests. When a limit is reached, check the end points of each array to see
-        # where we left off. Get that index/location of the last good request
-        #  and return it. Use as input of function as starting point for link
-        # generation.
-
-        # 5. Access the dictonary and contain the data in a spreadsheet for further development
         return
 
 
 def get_skin_data(
-    weaponName, skinName, qualities, quality_index, does_not_exist_arr, rate_limited_arr
+    weaponName: str,
+    skinName: str,
+    qualities: list,
+    quality_index: int,
+    does_not_exist_arr: list,
+    rate_limited_arr: list,
 ):
     base_link = formatLink(
         cs2ObjectType.gun,
@@ -362,7 +394,9 @@ def get_skin_data(
     return base_prices_data
 
 
-def create_price_tuples(base_prices_data, price_hist_tuples, skin_instance_index):
+def create_price_tuples(
+    base_prices_data: list, price_hist_tuples: list, skin_instance_index: int
+):
     for record in base_prices_data:
         # if instance_exists then get the most recent price_history record and start adding records from that day
         raw_date = record[0]
@@ -382,6 +416,6 @@ def create_price_tuples(base_prices_data, price_hist_tuples, skin_instance_index
 
 
 # fixSpreadSheet()
-writeItemEntry()
+makeSteamRequests()
+# populateDatabase()
 # print(make_batches("weaponSkins.csv", 0, 0, 100))
-
